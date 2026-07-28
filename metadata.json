@@ -1,0 +1,6 @@
+{
+  "name": "Automation Put Away Transfer",
+  "description": "Aplikasi Otomasi Transfer Put Away dengan fitur pencarian produk, database Excel, dan export hasil transfer ke format Excel.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
