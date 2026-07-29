@@ -99,112 +99,117 @@ export const parseProductDatabaseExcel = async (file: File): Promise<Product[]> 
 
         const rawRows = XLSX.utils.sheet_to_json<Record<string, any>>(worksheet);
 
-        const products: Product[] = [];
+        // Map to aggregate products by Item Code
+        const productMap = new Map<string, Product>();
 
         rawRows.forEach((row, index) => {
-          // Find fields with key flexibility matching ERP export (item_masters_export)
-          const itemCode = 
+          // Find fields with key flexibility matching ERP / OHB export
+          const itemCode = String(
             row['Item Code'] ||
             row['Item Codes'] ||
             row['Kode Produk'] ||
             row['Kode'] ||
             row['itemCode'] ||
             row['item_code'] ||
-            '';
+            ''
+          ).trim();
 
-          const itemName = 
-            row['Description'] ||
+          const itemName = String(
             row['Item Name'] ||
+            row['Description'] ||
             row['Nama Produk'] ||
             row['Nama Item'] ||
             row['Deskripsi'] ||
             row['Nama'] ||
             row['itemName'] ||
-            row['item_name'] ||
-            '';
+            ''
+          ).trim();
 
           if (!itemCode && !itemName) {
             return; // skip empty rows
           }
 
-          const barcode = 
+          const barcode = String(
             row['Barcode'] ||
             row['iRetail Code'] ||
             row['GTIN'] ||
-            '';
+            ''
+          ).trim();
 
-          const uom = 
+          const uom = String(
+            row['Default UOM'] ||
             row['UOM'] ||
             row['Unit'] ||
             row['Satuan'] ||
-            'KG';
+            'KG'
+          ).trim();
 
-          const className = 
-            row['Class Name'] ||
-            row['Cat Name'] ||
-            row['Department Name'] ||
-            '';
-
-          const category = 
+          const category = String(
             row['Class Name'] ||
             row['Cat Name'] ||
             row['Department Name'] ||
             row['Kategori'] ||
             row['Category'] ||
-            'DAGING';
+            row['Storage Name'] ||
+            'DAGING'
+          ).trim();
 
-          const department = 
-            row['Department Name'] ||
-            row['Department'] ||
-            row['Entity'] ||
-            'DAGING';
-
-          const defaultLocationCode = 
+          const storageCode = String(
+            row['Storage Code'] ||
             row['Location Code'] ||
             row['Kode Lokasi'] ||
             row['defaultLocationCode'] ||
-            'WH-CENTRAL';
+            '007'
+          ).trim();
 
-          const defaultStorageFrom = 
-            row['Storage Location Code From'] ||
-            row['Lokasi Asal (From)'] ||
-            row['Storage From'] ||
-            row['Lokasi Asal'] ||
-            'STORAGE-MEAT-01';
+          // Extract base location code (e.g. "007A" -> "007")
+          let baseLoc = storageCode;
+          if (baseLoc.endsWith('A') || baseLoc.endsWith('B')) {
+            baseLoc = baseLoc.slice(0, -1);
+          }
+          if (!baseLoc) baseLoc = '007';
 
-          const defaultStorageTo = 
-            row['Storage Location Code To'] ||
-            row['Lokasi Tujuan (To)'] ||
-            row['Storage To'] ||
-            row['Lokasi Tujuan'] ||
-            'DISPLAY-MEAT-01';
-
-          const stockStorage = Number(
-            row['Stok Storage'] || row['Stock Storage'] || row['Quantities'] || row['Reference Quantity'] || 100
+          const stockOnHand = Number(
+            row['Stock on Hand'] ||
+            row['Stok Storage'] ||
+            row['Stock Storage'] ||
+            row['Quantities'] ||
+            row['Reference Quantity'] ||
+            0
           );
 
-          const stockDisplay = Number(
-            row['Stok Display'] || row['Stock Display'] || 0
-          );
+          const isDisplayRow = storageCode.endsWith('A') || String(row['Storage Name'] || '').toLowerCase().includes('display');
+          const isStorageRow = storageCode.endsWith('B') || String(row['Storage Name'] || '').toLowerCase().includes('storage');
 
-          products.push({
-            id: `imported-${Date.now()}-${index}`,
-            itemCode: String(itemCode).trim(),
-            itemName: String(itemName).trim(),
-            barcode: String(barcode).trim(),
-            uom: String(uom).trim(),
-            category: String(category).trim(),
-            className: String(className).trim(),
-            department: String(department).trim(),
-            defaultLocationCode: String(defaultLocationCode).trim(),
-            defaultStorageFrom: String(defaultStorageFrom).trim(),
-            defaultStorageTo: String(defaultStorageTo).trim(),
-            stockStorage,
-            stockDisplay,
-          });
+          const key = itemCode || `item-${index}`;
+
+          if (productMap.has(key)) {
+            const existing = productMap.get(key)!;
+            if (isDisplayRow) {
+              existing.stockDisplay = (existing.stockDisplay || 0) + stockOnHand;
+            } else if (isStorageRow) {
+              existing.stockStorage = (existing.stockStorage || 0) + stockOnHand;
+            } else {
+              existing.stockStorage = (existing.stockStorage || 0) + stockOnHand;
+            }
+          } else {
+            productMap.set(key, {
+              id: `imported-${Date.now()}-${index}`,
+              itemCode,
+              itemName: itemName || itemCode,
+              barcode,
+              uom,
+              category,
+              defaultLocationCode: baseLoc,
+              defaultStorageFrom: `${baseLoc}B`,
+              defaultStorageTo: `${baseLoc}A`,
+              stockStorage: isDisplayRow ? 0 : stockOnHand,
+              stockDisplay: isDisplayRow ? stockOnHand : 0,
+            });
+          }
         });
 
-        resolve(products);
+        resolve(Array.from(productMap.values()));
       } catch (err) {
         reject(err);
       }
