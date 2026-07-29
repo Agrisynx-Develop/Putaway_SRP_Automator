@@ -1,18 +1,20 @@
 import React, { useState, useRef } from 'react';
-import { Database, Upload, Download, Plus, Search, Trash2, Edit2, Check, RefreshCw, FileSpreadsheet, Package, AlertCircle } from 'lucide-react';
+import { Database, Upload, Download, Plus, Search, Trash2, Edit2, Check, RefreshCw, ArrowRightLeft, ArrowRight, ArrowLeft, PackageCheck, Layers, Eye } from 'lucide-react';
 import { Product } from '../types';
 import { exportProductDatabaseTemplate, parseProductDatabaseExcel } from '../utils/excelUtils';
 
 interface DatabaseManagerProps {
   products: Product[];
   setProducts: React.Dispatch<React.SetStateAction<Product[]>>;
-  onAddQuickToTransfer: (product: Product, qty: number) => void;
+  onAddQuickToTransfer?: (product: Product, qty: number) => void;
+  onDirectTransfer?: (product: Product, quantity: number, transferType: 'B_TO_A' | 'A_TO_B') => void;
 }
 
 export const DatabaseManager: React.FC<DatabaseManagerProps> = ({
   products,
   setProducts,
   onAddQuickToTransfer,
+  onDirectTransfer,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
@@ -20,23 +22,29 @@ export const DatabaseManager: React.FC<DatabaseManagerProps> = ({
   const [editingId, setEditingId] = useState<string | null>(null);
   const [uploadStatus, setUploadStatus] = useState<string | null>(null);
 
+  // Per-row transfer quantity state
+  const [rowQuantities, setRowQuantities] = useState<Record<string, number>>({});
+
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // New product form state
   const [newProduct, setNewProduct] = useState<Partial<Product>>({
     itemCode: '',
     itemName: '',
-    category: 'Sembako',
-    defaultLocationCode: 'WH-CENTRAL',
-    defaultStorageFrom: 'STORAGE-A1',
-    defaultStorageTo: 'DISPLAY-01',
+    category: 'DAGING SEGAR REGULER',
+    uom: 'KG',
+    defaultLocationCode: '007',
     stockStorage: 100,
-    stockDisplay: 10,
+    stockDisplay: 20,
   });
+
+  // Calculate real-time totals
+  const totalDisplayStock = products.reduce((acc, p) => acc + (p.stockDisplay || 0), 0);
+  const totalStorageStock = products.reduce((acc, p) => acc + (p.stockStorage || 0), 0);
 
   // Filter products
   const categories = Array.from(
-    new Set(products.map((p) => p.category || 'Umum'))
+    new Set(products.map((p) => p.category || 'DAGING'))
   );
 
   const filteredProducts = products.filter((p) => {
@@ -47,7 +55,7 @@ export const DatabaseManager: React.FC<DatabaseManagerProps> = ({
       (p.barcode && p.barcode.toLowerCase().includes(term)) ||
       (p.uom && p.uom.toLowerCase().includes(term));
     const matchesCategory =
-      categoryFilter === 'all' || (p.category || 'Umum') === categoryFilter;
+      categoryFilter === 'all' || (p.category || 'DAGING') === categoryFilter;
     return matchesSearch && matchesCategory;
   });
 
@@ -56,7 +64,7 @@ export const DatabaseManager: React.FC<DatabaseManagerProps> = ({
     if (!file) return;
 
     try {
-      setUploadStatus('Membaca & Memproses file Excel...');
+      setUploadStatus('Membaca & Memproses file Excel database...');
       const importedProducts = await parseProductDatabaseExcel(file);
 
       if (importedProducts.length === 0) {
@@ -65,7 +73,7 @@ export const DatabaseManager: React.FC<DatabaseManagerProps> = ({
       }
 
       setProducts(importedProducts);
-      setUploadStatus(`Berhasil mengimpor ${importedProducts.length} produk dari Excel!`);
+      setUploadStatus(`Berhasil mengimpor ${importedProducts.length} produk dengan stok real-time!`);
       setTimeout(() => setUploadStatus(null), 4000);
     } catch (err) {
       console.error(err);
@@ -81,14 +89,20 @@ export const DatabaseManager: React.FC<DatabaseManagerProps> = ({
     e.preventDefault();
     if (!newProduct.itemCode || !newProduct.itemName) return;
 
+    let baseLoc = (newProduct.defaultLocationCode || '007').trim();
+    if (baseLoc.endsWith('A') || baseLoc.endsWith('B')) {
+      baseLoc = baseLoc.slice(0, -1);
+    }
+
     const created: Product = {
       id: `prod-manual-${Date.now()}`,
       itemCode: newProduct.itemCode.trim(),
       itemName: newProduct.itemName.trim(),
-      category: newProduct.category || 'Umum',
-      defaultLocationCode: newProduct.defaultLocationCode || 'WH-CENTRAL',
-      defaultStorageFrom: newProduct.defaultStorageFrom || 'STORAGE-A1',
-      defaultStorageTo: newProduct.defaultStorageTo || 'DISPLAY-01',
+      category: newProduct.category || 'DAGING',
+      uom: newProduct.uom || 'KG',
+      defaultLocationCode: baseLoc,
+      defaultStorageFrom: `${baseLoc}B`,
+      defaultStorageTo: `${baseLoc}A`,
       stockStorage: Number(newProduct.stockStorage) || 0,
       stockDisplay: Number(newProduct.stockDisplay) || 0,
     };
@@ -98,12 +112,11 @@ export const DatabaseManager: React.FC<DatabaseManagerProps> = ({
     setNewProduct({
       itemCode: '',
       itemName: '',
-      category: 'Sembako',
-      defaultLocationCode: 'WH-CENTRAL',
-      defaultStorageFrom: 'STORAGE-A1',
-      defaultStorageTo: 'DISPLAY-01',
+      category: 'DAGING SEGAR REGULER',
+      uom: 'KG',
+      defaultLocationCode: '007',
       stockStorage: 100,
-      stockDisplay: 10,
+      stockDisplay: 20,
     });
   };
 
@@ -115,23 +128,113 @@ export const DatabaseManager: React.FC<DatabaseManagerProps> = ({
     setProducts(products.filter((p) => p.id !== id));
   };
 
+  const handleQtyChange = (productId: string, val: number) => {
+    setRowQuantities((prev) => ({
+      ...prev,
+      [productId]: Math.max(1, val || 1),
+    }));
+  };
+
+  const handleExecuteTransfer = (p: Product, type: 'B_TO_A' | 'A_TO_B') => {
+    const qty = rowQuantities[p.id] || 1;
+    if (onDirectTransfer) {
+      onDirectTransfer(p, qty, type);
+    } else if (onAddQuickToTransfer) {
+      onAddQuickToTransfer(p, qty);
+    }
+  };
+
+  // Helper to extract base location code
+  const getBaseLoc = (loc?: string) => {
+    let clean = (loc || '007').trim();
+    if (clean.endsWith('A') || clean.endsWith('B')) {
+      clean = clean.slice(0, -1);
+    }
+    return clean || '007';
+  };
+
   return (
     <div className="space-y-6">
+      {/* Real-time Stock Metrics Bar */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        {/* Total Master Items */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg flex items-center justify-between">
+          <div>
+            <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+              TOTAL MASTER PRODUK
+            </div>
+            <div className="text-2xl font-black text-white font-mono mt-1">
+              {products.length.toLocaleString()}{' '}
+              <span className="text-xs font-sans font-normal text-slate-400">
+                Jenis Item
+              </span>
+            </div>
+            <div className="text-[11px] text-slate-400 mt-1">
+              Database master tersimpan
+            </div>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-purple-500/10 border border-purple-500/30 flex items-center justify-center text-purple-400 shrink-0">
+            <Database className="w-5 h-5" />
+          </div>
+        </div>
+
+        {/* Real-Time Display Stock (A) */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg flex items-center justify-between">
+          <div>
+            <div className="text-[11px] font-bold text-emerald-400 uppercase tracking-wider flex items-center gap-1.5">
+              <span>TABEL A: STOK DISPLAY (+A)</span>
+            </div>
+            <div className="text-2xl font-black text-emerald-400 font-mono mt-1">
+              {totalDisplayStock.toLocaleString()}{' '}
+              <span className="text-xs font-sans font-normal text-slate-400">
+                Pcs / Unit
+              </span>
+            </div>
+            <div className="text-[11px] text-slate-400 mt-1">
+              Area Rak Display Toko
+            </div>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 shrink-0">
+            <PackageCheck className="w-5 h-5" />
+          </div>
+        </div>
+
+        {/* Real-Time Storage Stock (B) */}
+        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 shadow-lg flex items-center justify-between">
+          <div>
+            <div className="text-[11px] font-bold text-cyan-400 uppercase tracking-wider flex items-center gap-1.5">
+              <span>TABEL B: STOK STORAGE (+B)</span>
+            </div>
+            <div className="text-2xl font-black text-cyan-300 font-mono mt-1">
+              {totalStorageStock.toLocaleString()}{' '}
+              <span className="text-xs font-sans font-normal text-slate-400">
+                Pcs / Unit
+              </span>
+            </div>
+            <div className="text-[11px] text-slate-400 mt-1">
+              Gudang Penyimpanan Utama
+            </div>
+          </div>
+          <div className="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 shrink-0">
+            <Layers className="w-5 h-5" />
+          </div>
+        </div>
+      </div>
+
       {/* Top Banner & Excel Upload Actions */}
       <div className="bg-slate-900/90 border border-slate-800 rounded-2xl p-5 shadow-xl">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div>
             <h2 className="text-lg font-bold text-white flex items-center gap-2">
               <Database className="w-5 h-5 text-emerald-400" />
-              Kelola Database Produk Master
+              Database Produk Master & Transfer Real-Time
             </h2>
             <p className="text-xs text-slate-400 mt-1">
-              Upload file Excel database produk Anda atau tambahkan produk baru secara manual.
+              Melihat stok Display (A) & Storage (B) secara real-time, serta langsung transfer dari database ke tabel hasil Put Away.
             </p>
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            {/* Hidden File Input */}
             <input
               type="file"
               ref={fileInputRef}
@@ -140,7 +243,6 @@ export const DatabaseManager: React.FC<DatabaseManagerProps> = ({
               className="hidden"
             />
 
-            {/* Upload Excel Button */}
             <button
               id="upload-excel-db-btn"
               type="button"
@@ -148,20 +250,18 @@ export const DatabaseManager: React.FC<DatabaseManagerProps> = ({
               className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-emerald-600 hover:bg-emerald-500 text-white shadow-lg transition-all"
             >
               <Upload className="w-4 h-4" />
-              <span>Import Database dari Excel</span>
+              <span>Import Database Excel</span>
             </button>
 
-            {/* Download Template Button */}
             <button
               type="button"
               onClick={exportProductDatabaseTemplate}
               className="flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 transition"
             >
               <Download className="w-4 h-4 text-emerald-400" />
-              <span>Download Template Excel</span>
+              <span>Template Excel</span>
             </button>
 
-            {/* Add Manual Product Button */}
             <button
               type="button"
               onClick={() => setIsAddingNew(!isAddingNew)}
@@ -181,7 +281,7 @@ export const DatabaseManager: React.FC<DatabaseManagerProps> = ({
         )}
       </div>
 
-      {/* Manual Product Creation Form (Toggleable) */}
+      {/* Manual Product Creation Form */}
       {isAddingNew && (
         <form
           onSubmit={handleCreateProduct}
@@ -204,33 +304,33 @@ export const DatabaseManager: React.FC<DatabaseManagerProps> = ({
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3">
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1">
-                Kode Produk *
+                Kode Produk (Item Code) *
               </label>
               <input
                 type="text"
                 required
                 value={newProduct.itemCode}
                 onChange={(e) => setNewProduct({ ...newProduct, itemCode: e.target.value })}
-                placeholder="misal: PRD-3001"
+                placeholder="misal: 100001"
                 className="w-full bg-slate-950 border border-slate-700 text-white font-mono text-xs rounded-xl p-2.5 focus:border-emerald-500 focus:outline-none"
               />
             </div>
 
             <div className="sm:col-span-2">
               <label className="block text-xs font-medium text-slate-300 mb-1">
-                Nama Produk *
+                Nama Produk (Description) *
               </label>
               <input
                 type="text"
                 required
                 value={newProduct.itemName}
                 onChange={(e) => setNewProduct({ ...newProduct, itemName: e.target.value })}
-                placeholder="misal: Kopi Hitam Instant Sachet 20g"
+                placeholder="misal: DAGING RENDANG POTONG FRESH KG"
                 className="w-full bg-slate-950 border border-slate-700 text-white text-xs rounded-xl p-2.5 focus:border-emerald-500 focus:outline-none"
               />
             </div>
 
-            <div className="sm:col-span-1">
+            <div>
               <label className="block text-xs font-medium text-slate-300 mb-1">
                 Kategori
               </label>
@@ -238,14 +338,14 @@ export const DatabaseManager: React.FC<DatabaseManagerProps> = ({
                 type="text"
                 value={newProduct.category}
                 onChange={(e) => setNewProduct({ ...newProduct, category: e.target.value })}
-                placeholder="misal: DAGING"
+                placeholder="misal: DAGING SEGAR"
                 className="w-full bg-slate-950 border border-slate-700 text-white text-xs rounded-xl p-2.5 focus:border-emerald-500 focus:outline-none"
               />
             </div>
 
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1">
-                UOM (Satuan)
+                Satuan (UOM)
               </label>
               <input
                 type="text"
@@ -253,6 +353,43 @@ export const DatabaseManager: React.FC<DatabaseManagerProps> = ({
                 onChange={(e) => setNewProduct({ ...newProduct, uom: e.target.value })}
                 placeholder="KG / PCS"
                 className="w-full bg-slate-950 border border-slate-700 text-amber-300 font-mono text-xs rounded-xl p-2.5 focus:border-emerald-500 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1">
+                Kode Lokasi (Base Loc)
+              </label>
+              <input
+                type="text"
+                value={newProduct.defaultLocationCode}
+                onChange={(e) => setNewProduct({ ...newProduct, defaultLocationCode: e.target.value })}
+                placeholder="007"
+                className="w-full bg-slate-950 border border-slate-700 text-emerald-400 font-mono text-xs rounded-xl p-2.5 focus:border-emerald-500 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1">
+                Stok Awal Display (Tabel A)
+              </label>
+              <input
+                type="number"
+                value={newProduct.stockDisplay}
+                onChange={(e) => setNewProduct({ ...newProduct, stockDisplay: Number(e.target.value) })}
+                className="w-full bg-slate-950 border border-slate-700 text-emerald-400 font-mono text-xs rounded-xl p-2.5 focus:border-emerald-500 focus:outline-none"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1">
+                Stok Awal Storage (Tabel B)
+              </label>
+              <input
+                type="number"
+                value={newProduct.stockStorage}
+                onChange={(e) => setNewProduct({ ...newProduct, stockStorage: Number(e.target.value) })}
+                className="w-full bg-slate-950 border border-slate-700 text-cyan-300 font-mono text-xs rounded-xl p-2.5 focus:border-emerald-500 focus:outline-none"
               />
             </div>
           </div>
@@ -282,7 +419,7 @@ export const DatabaseManager: React.FC<DatabaseManagerProps> = ({
             type="text"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Cari dalam database (Kode Produk atau Nama)..."
+            placeholder="Cari dalam database (Kode Produk, Barcode, atau Nama)..."
             className="w-full bg-slate-950 border border-slate-700 text-white text-xs rounded-xl pl-9 pr-4 py-2.5 focus:border-emerald-500 focus:outline-none"
           />
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
@@ -308,7 +445,7 @@ export const DatabaseManager: React.FC<DatabaseManagerProps> = ({
         </div>
       </div>
 
-      {/* Database Table */}
+      {/* Database Table with A (Display) and B (Storage) Real-time columns */}
       <div className="bg-slate-900 border border-slate-800 rounded-2xl shadow-xl overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs border-collapse">
@@ -317,52 +454,181 @@ export const DatabaseManager: React.FC<DatabaseManagerProps> = ({
                 <th className="p-3">Item Code</th>
                 <th className="p-3">Barcode</th>
                 <th className="p-3">Description / Nama Produk</th>
-                <th className="p-3">Kategori / Class</th>
+                <th className="p-3">Kategori</th>
                 <th className="p-3">UOM</th>
-                <th className="p-3 text-center">Aksi Edit/Hapus</th>
+                {/* Column A: Display */}
+                <th className="p-3 text-center bg-emerald-950/30 border-x border-slate-800 text-emerald-400">
+                  <div className="font-bold">A (DISPLAY)</div>
+                  <div className="text-[9px] text-slate-400 font-sans normal-case">Stok & Kode +A</div>
+                </th>
+                {/* Column B: Storage */}
+                <th className="p-3 text-center bg-cyan-950/30 border-r border-slate-800 text-cyan-300">
+                  <div className="font-bold">B (STORAGE)</div>
+                  <div className="text-[9px] text-slate-400 font-sans normal-case">Stok & Kode +B</div>
+                </th>
+                {/* Direct Transfer Column */}
+                <th className="p-3 text-center bg-slate-950">
+                  <div className="font-bold text-amber-300">LANGSUNG PUT AWAY</div>
+                  <div className="text-[9px] text-slate-400 font-sans normal-case">Transfer Database ➔ List</div>
+                </th>
+                <th className="p-3 text-center">Aksi Edit</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800 font-sans">
               {filteredProducts.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-slate-500">
+                  <td colSpan={9} className="p-8 text-center text-slate-500">
                     Tidak ada data produk ditemukan dalam database.
                   </td>
                 </tr>
               ) : (
                 filteredProducts.map((p) => {
                   const isEditing = editingId === p.id;
+                  const baseLoc = getBaseLoc(p.defaultLocationCode);
+                  const displayLocCode = `${baseLoc}A`;
+                  const storageLocCode = `${baseLoc}B`;
+                  const rowQty = rowQuantities[p.id] || 1;
 
                   return (
                     <tr key={p.id} className="hover:bg-slate-800/60 transition">
+                      {/* Item Code */}
                       <td className="p-3 font-mono font-bold text-emerald-400">
                         {p.itemCode}
                       </td>
+
+                      {/* Barcode */}
                       <td className="p-3 font-mono text-slate-400 text-[11px]">
                         {p.barcode || '-'}
                       </td>
-                      <td className="p-3 font-medium text-white">
+
+                      {/* Item Name */}
+                      <td className="p-3 font-medium text-white max-w-[240px]">
                         {isEditing ? (
                           <input
                             type="text"
                             value={p.itemName}
                             onChange={(e) => handleUpdateProduct(p.id, { itemName: e.target.value })}
-                            className="bg-slate-950 border border-slate-700 text-xs px-2 py-1 rounded text-white"
+                            className="bg-slate-950 border border-slate-700 text-xs px-2 py-1 rounded text-white w-full"
                           />
                         ) : (
                           p.itemName
                         )}
                       </td>
+
+                      {/* Category */}
                       <td className="p-3">
-                        <span className="bg-slate-800 text-slate-300 px-2 py-0.5 rounded text-[11px]">
-                          {p.category || 'DAGING'}
-                        </span>
+                        {isEditing ? (
+                          <input
+                            type="text"
+                            value={p.category || ''}
+                            onChange={(e) => handleUpdateProduct(p.id, { category: e.target.value })}
+                            className="bg-slate-950 border border-slate-700 text-xs px-2 py-1 rounded text-white w-24"
+                          />
+                        ) : (
+                          <span className="bg-slate-800 text-slate-300 px-2 py-0.5 rounded text-[11px] truncate inline-block max-w-[110px]">
+                            {p.category || 'DAGING'}
+                          </span>
+                        )}
                       </td>
+
+                      {/* UOM */}
                       <td className="p-3">
-                        <span className="font-bold text-amber-300 bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-800/60 text-[11px]">
-                          {p.uom || 'KG'}
-                        </span>
+                        {isEditing ? (
+                          <input
+                            type="text"
+                            value={p.uom || ''}
+                            onChange={(e) => handleUpdateProduct(p.id, { uom: e.target.value })}
+                            className="bg-slate-950 border border-slate-700 text-xs px-1.5 py-1 rounded text-amber-300 font-mono w-14"
+                          />
+                        ) : (
+                          <span className="font-bold text-amber-300 bg-amber-950/60 px-1.5 py-0.5 rounded border border-amber-800/60 text-[11px]">
+                            {p.uom || 'KG'}
+                          </span>
+                        )}
                       </td>
+
+                      {/* TABEL A: Display Stock & Location Code +A */}
+                      <td className="p-3 text-center bg-emerald-950/20 border-x border-slate-800/80">
+                        {isEditing ? (
+                          <input
+                            type="number"
+                            value={p.stockDisplay ?? 0}
+                            onChange={(e) => handleUpdateProduct(p.id, { stockDisplay: Number(e.target.value) })}
+                            className="bg-slate-950 border border-emerald-500 text-emerald-400 font-mono text-xs px-1.5 py-1 rounded w-16 text-center"
+                          />
+                        ) : (
+                          <div className="flex flex-col items-center gap-0.5">
+                            <span className="font-mono font-bold text-emerald-400 text-sm">
+                              {(p.stockDisplay ?? 0).toLocaleString()}{' '}
+                              <span className="text-[10px] font-normal text-slate-400">{p.uom || 'Pcs'}</span>
+                            </span>
+                            <span className="px-1.5 py-0.2 rounded bg-emerald-950 border border-emerald-500/40 text-emerald-300 font-mono text-[10px]">
+                              {displayLocCode}
+                            </span>
+                          </div>
+                        )}
+                      </td>
+
+                      {/* TABEL B: Storage Stock & Location Code +B */}
+                      <td className="p-3 text-center bg-cyan-950/20 border-r border-slate-800/80">
+                        {isEditing ? (
+                          <input
+                            type="number"
+                            value={p.stockStorage ?? 0}
+                            onChange={(e) => handleUpdateProduct(p.id, { stockStorage: Number(e.target.value) })}
+                            className="bg-slate-950 border border-cyan-500 text-cyan-300 font-mono text-xs px-1.5 py-1 rounded w-16 text-center"
+                          />
+                        ) : (
+                          <div className="flex flex-col items-center gap-0.5">
+                            <span className="font-mono font-bold text-cyan-300 text-sm">
+                              {(p.stockStorage ?? 0).toLocaleString()}{' '}
+                              <span className="text-[10px] font-normal text-slate-400">{p.uom || 'Pcs'}</span>
+                            </span>
+                            <span className="px-1.5 py-0.2 rounded bg-cyan-950 border border-cyan-500/40 text-cyan-300 font-mono text-[10px]">
+                              {storageLocCode}
+                            </span>
+                          </div>
+                        )}
+                      </td>
+
+                      {/* Direct Transfer Action Column */}
+                      <td className="p-3 text-center">
+                        <div className="flex items-center justify-center gap-1.5">
+                          {/* Qty Input */}
+                          <input
+                            type="number"
+                            min="1"
+                            value={rowQty}
+                            onChange={(e) => handleQtyChange(p.id, Number(e.target.value))}
+                            className="w-12 bg-slate-950 border border-slate-700 rounded-lg px-1 py-1 text-center font-mono font-bold text-amber-300 text-xs focus:border-emerald-500 focus:outline-none"
+                            title="Jumlah Qty untuk ditransfer"
+                          />
+
+                          {/* Button B -> A (Storage to Display) */}
+                          <button
+                            type="button"
+                            onClick={() => handleExecuteTransfer(p, 'B_TO_A')}
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-2 py-1 rounded-lg text-[11px] flex items-center gap-1 shadow transition group"
+                            title={`Put Away Storage (${storageLocCode}) ➔ Display (${displayLocCode})`}
+                          >
+                            <span>B ➔ A</span>
+                            <ArrowRight className="w-3 h-3 group-hover:translate-x-0.5 transition-transform" />
+                          </button>
+
+                          {/* Button A -> B (Display to Storage) */}
+                          <button
+                            type="button"
+                            onClick={() => handleExecuteTransfer(p, 'A_TO_B')}
+                            className="bg-cyan-700 hover:bg-cyan-600 text-white font-bold px-2 py-1 rounded-lg text-[11px] flex items-center gap-1 shadow transition group"
+                            title={`Put Away Display (${displayLocCode}) ➔ Storage (${storageLocCode})`}
+                          >
+                            <ArrowLeft className="w-3 h-3 group-hover:-translate-x-0.5 transition-transform" />
+                            <span>A ➔ B</span>
+                          </button>
+                        </div>
+                      </td>
+
+                      {/* Actions: Edit & Delete */}
                       <td className="p-3 text-center">
                         <div className="flex items-center justify-center gap-2">
                           <button
