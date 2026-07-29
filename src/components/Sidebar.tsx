@@ -51,7 +51,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               Put Away Pro
             </h1>
             <p className="text-[11px] text-emerald-400 font-semibold tracking-wide uppercase mt-1">
-              Excel WMS v2.0
+              TEGUH GUNTORO | MT SRAP BATCH 2
             </p>
           </div>
         </div>
