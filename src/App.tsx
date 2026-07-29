@@ -13,7 +13,7 @@ import { CheckCircle2, PackageCheck, Layers, ArrowRightLeft, FileSpreadsheet, Sp
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'transfer' | 'database' | 'history' | 'settings'>('transfer');
-  const [operatorName, setOperatorName] = useState<string>('TDN CIKUT');
+  const [operatorName, setOperatorName] = useState<string>('Supervisor Teguh');
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
   // Master Products Database
@@ -79,6 +79,81 @@ export default function App() {
   const showToast = (message: string, type: 'success' | 'info' = 'success') => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3000);
+  };
+
+  // Direct Transfer from Database Manager (Real-Time Stock Updates & Add to Put Away Queue)
+  const handleDirectTransferFromDb = (
+    product: Product,
+    quantity: number,
+    transferType: 'B_TO_A' | 'A_TO_B'
+  ) => {
+    let baseLoc = (product.defaultLocationCode || locationCode || '007').trim();
+    if (baseLoc.endsWith('A') || baseLoc.endsWith('B')) {
+      baseLoc = baseLoc.slice(0, -1);
+    }
+    if (!baseLoc) baseLoc = '007';
+
+    const locA = `${baseLoc}A`;
+    const locB = `${baseLoc}B`;
+
+    const isBToA = transferType === 'B_TO_A';
+    const locCodeToUse = isBToA ? locA : locB;
+    const storageFromToUse = isBToA ? locB : locA;
+    const storageToToUse = isBToA ? locA : locB;
+
+    // 1. Add or update transfer item queue
+    const existingIndex = transferItems.findIndex(
+      (item) =>
+        item.itemCode === product.itemCode &&
+        item.locationCode === locCodeToUse &&
+        item.storageFrom === storageFromToUse &&
+        item.storageTo === storageToToUse
+    );
+
+    if (existingIndex >= 0) {
+      const updated = [...transferItems];
+      updated[existingIndex].quantity += quantity;
+      setTransferItems(updated);
+    } else {
+      const newItem: PutAwayItem = {
+        id: `putaway-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+        locationCode: locCodeToUse,
+        storageFrom: storageFromToUse,
+        storageTo: storageToToUse,
+        itemCode: product.itemCode,
+        itemName: product.itemName,
+        quantity: quantity,
+      };
+      setTransferItems([newItem, ...transferItems]);
+    }
+
+    // 2. Real-time update product stock in master database
+    setProducts((prev) =>
+      prev.map((p) => {
+        if (p.id === product.id) {
+          const currentStorage = p.stockStorage ?? 0;
+          const currentDisplay = p.stockDisplay ?? 0;
+          if (isBToA) {
+            return {
+              ...p,
+              stockStorage: Math.max(0, currentStorage - quantity),
+              stockDisplay: currentDisplay + quantity,
+            };
+          } else {
+            return {
+              ...p,
+              stockDisplay: Math.max(0, currentDisplay - quantity),
+              stockStorage: currentStorage + quantity,
+            };
+          }
+        }
+        return p;
+      })
+    );
+
+    showToast(
+      `Berhasil transfer ${quantity} ${product.uom || 'Pcs'} ${product.itemCode} (${storageFromToUse} ➔ ${storageToToUse}) ke Hasil Put Away!`
+    );
   };
 
   // Add Item to Transfer Queue
@@ -330,6 +405,7 @@ export default function App() {
               handleAddToList(prod, qty);
               setActiveTab('transfer');
             }}
+            onDirectTransfer={handleDirectTransferFromDb}
           />
         )}
 
