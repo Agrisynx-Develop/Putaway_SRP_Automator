@@ -13,7 +13,7 @@ import { CheckCircle2, PackageCheck, Layers, ArrowRightLeft, FileSpreadsheet, Sp
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<'transfer' | 'database' | 'history' | 'settings'>('transfer');
-  const [operatorName, setOperatorName] = useState<string>('Supervisor Teguh');
+  const [operatorName, setOperatorName] = useState<string>('TDN CIKUT');
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
   // Master Products Database
