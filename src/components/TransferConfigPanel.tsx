@@ -128,4 +128,4 @@ export const TransferConfigPanel: React.FC<TransferConfigPanelProps> = ({
       </div>
     </div>
   );
-};
+}; 
